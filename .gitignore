@@ -1,6 +1,8 @@
 # Created by https://www.toptal.com/developers/gitignore/api/windows,macos,linux,c
 # Edit at https://www.toptal.com/developers/gitignore?templates=windows,macos,linux,c
 
+.vscode/
+
 ### C ###
 # Prerequisites
 *.d
@@ -10,6 +12,7 @@
 *.ko
 *.obj
 *.elf
+ps
 
 # Linker output
 *.ilk
@@ -77,7 +80,8 @@ dkms.conf
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
+
 
 # Thumbnails
 ._*
