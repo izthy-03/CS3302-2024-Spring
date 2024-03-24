@@ -36,21 +36,22 @@ static ssize_t proc_read(struct file *fp, char __user *ubuf, size_t len, loff_t 
         /* Calculated each number */
         char delimiter = (i < ninp - 1) ? ',' : '\n';
         if (strcmp(operator, "add") == 0) {
-            out_len += sprintf(tmpbuf, "%d%c", operand1 + operand2[i], delimiter);
+            sprintf(tmpbuf, "%d%c", operand1 + operand2[i], delimiter);
         } else if (strcmp(operator, "mul") == 0) {
-            out_len += sprintf(tmpbuf, "%d%c", operand1 * operand2[i], delimiter);
+            sprintf(tmpbuf, "%d%c", operand1 * operand2[i], delimiter);
         } else {
             out_len += sprintf(output, "Unknown operator\n");
             break;
         }
 
         /* Check buffer overflow */
-        if (out_len > MAX_SIZE) {
+        if (out_len + strlen(tmpbuf) > MAX_SIZE) {
             pr_info("inner buffer overflow, stop reading\n");
             break;
         }
 
         /* Append to output buffer */
+        out_len += strlen(tmpbuf);
         strcat(output, tmpbuf);
     }
 
