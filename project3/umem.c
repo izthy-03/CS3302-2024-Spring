@@ -21,7 +21,7 @@ struct umem_pool_t {
 
     struct pginfo_t {
         struct task_struct* owner;
-    } info[UMEM_POOL_SIZE];
+    } pginfo[UMEM_POOL_SIZE];
 
 };
 
@@ -66,6 +66,16 @@ static int umem_release(struct inode *inode, struct file *filp)
     pr_info("Process %p released\n", current);
     spin_lock(&userinfo_lock);
     struct userinfo_t* userinfo = filp->private_data;
+
+    /* Release unfreed pages in pool */
+    struct list_head *block;
+    list_for_each(block, &userinfo->block_head) {
+        struct umem_block_t* umemblock = list_entry(block, struct umem_block_t, blocklist);
+        vm_munmap(umemblock->vaddr, umemblock->size);
+        list_del(block);
+        kfree(umemblock);
+    }
+
     list_del(&userinfo->list);
     kfree(userinfo);
     spin_unlock(&userinfo_lock);
@@ -202,6 +212,21 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         pr_info("todo\n");
         spin_lock(&userinfo_lock);
 
+        /* Find the specified block */
+        userinfo = find_userinfo(current);
+        if (userinfo == NULL) {
+            pr_info("umem_ioctl cmd page_fault: failed to find current userinfo\n");
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
+        blockinfo = find_blockinfo(userinfo, kern_umem_info.umem_addr);
+        if (blockinfo == NULL) {
+            pr_info("umem_ioctl cmd page_fault: failed to find blockinfo\n");
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
+
+
         spin_unlock(&userinfo_lock);
         return -EINVAL;
         return 0;
@@ -243,6 +268,7 @@ static void umem_pool_init(void)
         if (umem_pool[i].head == NULL) {
             pr_warn("No enougn mem\n");
         }
+        memset(umem_pool[i].pginfo, 0 ,sizeof(umem_pool[i].pginfo));
     }
 }
 
