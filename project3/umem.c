@@ -15,25 +15,95 @@
 MODULE_LICENSE("GPL");
 
 // TODO: data structure definition
+struct umem_pool_t {
+    struct page* head;
+    unsigned int order;
+
+    struct pginfo_t {
+        struct task_struct* owner;
+    } info[UMEM_POOL_SIZE];
+
+};
+
+/* Malloc block info */
+struct umem_block_t {
+    struct list_head blocklist;
+    struct page* page;
+    unsigned long vaddr;
+    unsigned long size;
+    unsigned int pool;
+};
+
+struct userinfo_t {
+    struct list_head list;
+    struct task_struct* user;
+    struct list_head block_head;
+};
+
+struct umem_pool_t umem_pool[UMEM_NUM_POOL];
+struct list_head userinfo_head;
+      spinlock_t userinfo_lock;
+
 
 static int umem_open(struct inode *inode, struct file *filp)
 {
     // TODO
-    pr_info("todo\n");
+    pr_info("Process %p opened\n", current);
+    struct userinfo_t* userinfo = kmalloc(sizeof(struct userinfo_t), GFP_KERNEL);
+    userinfo->user = current;
+    INIT_LIST_HEAD(&userinfo->block_head);
+    spin_lock(&userinfo_lock);
+    list_add(&userinfo->list, &userinfo_head);
+    spin_unlock(&userinfo_lock);
+
+    filp->private_data = userinfo;
     return 0;
 }
 
 static int umem_release(struct inode *inode, struct file *filp)
 {
     // TODO
-    pr_info("todo\n");
+    pr_info("Process %p released\n", current);
+    spin_lock(&userinfo_lock);
+    struct userinfo_t* userinfo = filp->private_data;
+    list_del(&userinfo->list);
+    kfree(userinfo);
+    spin_unlock(&userinfo_lock);
     return 0;
+}
+
+/* 
+ * Find specified user's info 
+ * return NULL if not found
+ */
+static struct userinfo_t* find_userinfo(struct task_struct* user) {
+    struct list_head* node;
+    list_for_each(node, &userinfo_head) {
+        struct userinfo_t* userinfo = list_entry(node, struct userinfo_t, list);
+        if (userinfo->user == user) {
+            return userinfo;
+        }
+    }
+    return NULL;
+}
+
+static struct umem_block_t* find_blockinfo(struct userinfo_t* userinfo, unsigned long addr) {
+    struct list_head* node;
+    list_for_each(node, &userinfo->block_head) {
+        struct umem_block_t* block = list_entry(node, struct umem_block_t, blocklist);
+        if (block->vaddr == addr) {
+            return block;
+        }
+    }
+    return NULL;
 }
 
 static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     long err;
     struct umem_info kern_umem_info;
+    struct userinfo_t* userinfo;
+    struct umem_block_t* blockinfo;
 
     pr_info("umem_ioctl cmd: %u\n", cmd);
 
@@ -60,8 +130,30 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         // TODO
         pr_info("todo\n");
-        return -EINVAL;
-        return 0;
+        spin_lock(&userinfo_lock);
+
+        /* Find or create userinfo of current process */
+        userinfo = find_userinfo(current);
+        if (userinfo == NULL) {
+            userinfo = kmalloc(sizeof(struct userinfo_t), GFP_KERNEL);
+            userinfo->user = current;
+            INIT_LIST_HEAD(&userinfo->block_head);
+            list_add(&userinfo->list, &userinfo_head);
+        }
+
+        /* Add new blockinfo to blocklist */
+        struct umem_block_t* block = kmalloc(sizeof(struct umem_block_t), GFP_KERNEL);
+        block->pool = kern_umem_info.umem_pool;
+        block->size = kern_umem_info.umem_size;
+        block->vaddr = vm_mmap(NULL, 0, kern_umem_info.umem_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, 0);
+        pr_info("umem_ioctl cmd malloc: %p\n", (void *)block->vaddr);
+        block->page = NULL;
+        list_add(&block->blocklist, &userinfo->block_head);
+
+        spin_unlock(&userinfo_lock);
+
+        return block->vaddr;
+
 
     case UMEM_IOC_FREE:
         err = get_user(kern_umem_info.umem_addr, &((struct umem_info __user *)arg)->umem_addr);
@@ -73,8 +165,31 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         pr_info("umem_ioctl cmd free: %px\n", (void *)kern_umem_info.umem_addr);
         // TODO
         pr_info("todo\n");
-        return -EINVAL;
+        spin_lock(&userinfo_lock);
+
+        /* Find current userinfo */
+        userinfo = find_userinfo(current);
+        if (userinfo == NULL) {
+            pr_info("umem_ioctl cmd free: failed to find current userinfo\n");
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
+
+        /* Locate the block to be freed */
+        blockinfo = find_blockinfo(userinfo, kern_umem_info.umem_addr);
+        if (blockinfo == NULL) {
+            pr_info("umem_ioctl cmd free: failed to find blockinfo\n");
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
+
+        vm_munmap(blockinfo->vaddr, blockinfo->size);
+        pr_info("umem_ioctl cmd free: free blockinfo\n");
+
+        spin_unlock(&userinfo_lock);
         return 0;
+
+
     case UMEM_IOC_PAGE_FAULT:
         err = get_user(kern_umem_info.umem_addr, &((struct umem_info __user *)arg)->umem_addr);
         if (err)
@@ -85,6 +200,9 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         pr_info("umem_ioctl cmd page_fault: %px\n", (void *)kern_umem_info.umem_addr);
         // TODO
         pr_info("todo\n");
+        spin_lock(&userinfo_lock);
+
+        spin_unlock(&userinfo_lock);
         return -EINVAL;
         return 0;
     }
@@ -107,14 +225,50 @@ static struct device *dev;
 static void umem_pool_init(void)
 {
     // TODO
-    pr_info("todo\n");
+    unsigned int order = 0;
+
+    pr_info("Initializing umem pools\n");
+
+    INIT_LIST_HEAD(&userinfo_head);
+    spin_lock_init(&userinfo_lock);
+
+    /* Round up to 2's order */
+    while ((1 << order) < UMEM_POOL_SIZE) {
+        order++;
+    }    
+    
+    for (int i = 0; i < UMEM_NUM_POOL; i++) {
+        umem_pool[i].order = order;
+        umem_pool[i].head = alloc_pages(0, order);
+        if (umem_pool[i].head == NULL) {
+            pr_warn("No enougn mem\n");
+        }
+    }
 }
 
 static void umem_pool_destroy(void)
 {
     // TODO
-    pr_info("todo\n");
+    pr_info("Freeing umem pools\n");
+
+    struct list_head *node, *block;
+    list_for_each(node, &userinfo_head) {
+        struct userinfo_t* userinfo = list_entry(node, struct userinfo_t, list);
+
+        list_for_each(block, &userinfo->block_head) {
+            struct umem_block_t* umemblock = list_entry(block, struct umem_block_t, blocklist);
+            list_del(block);
+            kfree(umemblock);
+        }
+        list_del(node);
+        kfree(userinfo);
+    }
+
+    for (int i = 0; i < UMEM_NUM_POOL; i++) {
+        __free_pages(umem_pool[i].head, umem_pool[i].order);
+    }
 }
+
 
 static int __init umem_init(void)
 {
