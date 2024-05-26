@@ -86,7 +86,8 @@ static int umem_release(struct inode *inode, struct file *filp)
  * Find specified user's info 
  * return NULL if not found
  */
-static struct userinfo_t* find_userinfo(struct task_struct* user) {
+static struct userinfo_t* 
+find_userinfo(struct task_struct* user) {
     struct list_head* node;
     list_for_each(node, &userinfo_head) {
         struct userinfo_t* userinfo = list_entry(node, struct userinfo_t, list);
@@ -97,7 +98,8 @@ static struct userinfo_t* find_userinfo(struct task_struct* user) {
     return NULL;
 }
 
-static struct umem_block_t* find_blockinfo(struct userinfo_t* userinfo, unsigned long addr) {
+static struct umem_block_t* 
+find_blockinfo(struct userinfo_t* userinfo, unsigned long addr) {
     struct list_head* node;
     list_for_each(node, &userinfo->block_head) {
         struct umem_block_t* block = list_entry(node, struct umem_block_t, blocklist);
@@ -106,6 +108,67 @@ static struct umem_block_t* find_blockinfo(struct userinfo_t* userinfo, unsigned
         }
     }
     return NULL;
+}
+
+/*
+ * Linear scan to find continuous pages
+ * return NULL if no enough pages
+ * return the head of the pages if found
+ */
+static struct page* 
+alloc_pool_pages(const int poolid, const int pagenum, struct task_struct* user) {
+    if (poolid >= UMEM_NUM_POOL) {
+        pr_warn("Invalid pool id\n");
+        return NULL;
+    }
+    if (pagenum > UMEM_POOL_SIZE) {
+        pr_warn("Too many pages\n");
+        return NULL;
+    }
+
+    struct page* page = umem_pool[poolid].head;
+    int cnt = 0, pgid = 0;
+    while (pgid < UMEM_POOL_SIZE &&  cnt < pagenum) {
+        if (page == NULL) {
+            pr_warn("Unallocated pool pages\n");
+            return NULL;
+        }
+        if (umem_pool[poolid].pginfo[pgid].owner == NULL) {
+            cnt++;
+        } else {
+            cnt = 0;
+        }
+        pgid++, page++;
+    }
+
+    /* No enough continuous pages */
+    if (cnt < pagenum) {
+        pr_warn("No enough pages in pool %d\n", poolid);
+        return NULL;
+    }
+
+    /* Mark the pages */
+    pgid -= pagenum;
+    for (int i = 0; i < pagenum; i++) {
+        umem_pool[poolid].pginfo[pgid + i].owner = user;
+    }
+
+    return (struct page*)(page - pagenum);
+}
+
+void free_pool_pages(const int poolid, const int pagenum, const int offset) {
+    if (poolid >= UMEM_NUM_POOL) {
+        pr_warn("Invalid pool id\n");
+        return;
+    }
+    if (pagenum > UMEM_POOL_SIZE) {
+        pr_warn("Too many pages\n");
+        return;
+    }
+
+    for (int i = 0; i < pagenum; i++) {
+        umem_pool[poolid].pginfo[offset + i].owner = NULL;
+    }
 }
 
 static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
@@ -212,7 +275,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         pr_info("todo\n");
         spin_lock(&userinfo_lock);
 
-        /* Find the specified block */
+        /* Find the specified block and check validity */
         userinfo = find_userinfo(current);
         if (userinfo == NULL) {
             pr_info("umem_ioctl cmd page_fault: failed to find current userinfo\n");
@@ -221,14 +284,32 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         blockinfo = find_blockinfo(userinfo, kern_umem_info.umem_addr);
         if (blockinfo == NULL) {
-            pr_info("umem_ioctl cmd page_fault: failed to find blockinfo\n");
+            pr_info("umem_ioctl cmd page_fault: failed to find blockinfo at %p\n", (void *)kern_umem_info.umem_addr);
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
 
+        /* Allocate required page for the block */
+        int pagenum = (blockinfo->size - 1) / PAGE_SIZE + 1;
+        struct page* page = alloc_pool_pages(blockinfo->pool, pagenum, current);
+        if (page == NULL) {
+            pr_info("umem_ioctl cmd page_fault: failed to allocate pages\n");
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
+        /* Remap vaddr to physical pages */
+        struct vm_area_struct* vma = find_vma(current->mm, blockinfo->vaddr);
+        // Modify vm prot 
+        vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+        int ret = remap_pfn_range(vma, blockinfo->vaddr, page_to_pfn(page), blockinfo->size, vma->vm_page_prot);
+        if (ret) {
+            pr_info("umem_ioctl cmd page_fault: failed to remap pages\n");
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
 
         spin_unlock(&userinfo_lock);
-        return -EINVAL;
+
         return 0;
     }
 
