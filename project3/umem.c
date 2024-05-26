@@ -55,9 +55,6 @@ static int umem_open(struct inode *inode, struct file *filp)
     struct userinfo_t* userinfo = kmalloc(sizeof(struct userinfo_t), GFP_KERNEL);
     userinfo->user = current;
     INIT_LIST_HEAD(&userinfo->block_head);
-    pr_info("umem_open: userinfo->block_head %p\n", (void *)&userinfo->block_head);
-    pr_info("umem_open: userinfo->block_head.next %p\n", (void *)userinfo->block_head.next);
-    pr_info("umem_open: userinfo->block_head.prev %p\n", (void *)userinfo->block_head.prev);
 
     spin_lock(&userinfo_lock);
     list_add(&userinfo->list, &userinfo_head);
@@ -190,6 +187,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     long err;
     struct umem_info kern_umem_info;
+
     struct userinfo_t* userinfo;
     struct umem_block_t* blockinfo;
 
@@ -244,7 +242,8 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
         spin_unlock(&userinfo_lock);
 
-        return block->vaddr;
+        put_user(block->vaddr, &((struct umem_info __user *)arg)->umem_addr);
+        return 0;
 
 
     case UMEM_IOC_FREE:
@@ -377,11 +376,11 @@ static void umem_pool_destroy(void)
     // TODO
     pr_info("Freeing umem pools\n");
 
-    struct list_head *node, *block;
-    list_for_each(node, &userinfo_head) {
+    struct list_head *node, *block, *nn, *nb;
+    list_for_each_safe(node, nn, &userinfo_head) {
         struct userinfo_t* userinfo = list_entry(node, struct userinfo_t, list);
 
-        list_for_each(block, &userinfo->block_head) {
+        list_for_each_safe(block, nb, &userinfo->block_head) {
             struct umem_block_t* umemblock = list_entry(block, struct umem_block_t, blocklist);
             list_del(block);
             kfree(umemblock);
