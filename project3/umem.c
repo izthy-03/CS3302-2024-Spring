@@ -232,7 +232,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         struct umem_block_t* block = kmalloc(sizeof(struct umem_block_t), GFP_KERNEL);
         block->pool = kern_umem_info.umem_pool;
         block->size = kern_umem_info.umem_size;
-        block->vaddr = vm_mmap(NULL, 0, kern_umem_info.umem_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, 0);
+        block->vaddr = vm_mmap(NULL, 0, kern_umem_info.umem_size, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, 0);
         block->page = NULL;
         pr_info("umem_ioctl cmd malloc: vm_mmap %px\n", (void *)block->vaddr);
         pr_info("umem_ioctl cmd malloc: block %px\n", (void *)block);
@@ -255,7 +255,6 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         pr_info("umem_ioctl cmd free: %px\n", (void *)kern_umem_info.umem_addr);
         // TODO
-        pr_info("todo\n");
         spin_lock(&userinfo_lock);
 
         /* Find current userinfo */
@@ -308,6 +307,11 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
+        if (blockinfo->page != NULL) {
+            pr_info("umem_ioctl cmd page_fault: page already allocated\n");
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
 
         /* Allocate required page for the block */
         int pagenum = (blockinfo->size - 1) / PAGE_SIZE + 1;
@@ -317,16 +321,23 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
+        pr_info("umem_ioctl cmd page_fault: allocated pages %px\n", (void *)page);
+
         /* Remap vaddr to physical pages */
         struct vm_area_struct* vma = find_vma(current->mm, blockinfo->vaddr);
-        // Modify vm prot 
-        vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+        // Modify vm_prot to RW 
+        pr_info("vm_page_prot before: %lx\n", vma->vm_page_prot);
+        vma->vm_page_prot = vm_get_page_prot(vma->vm_flags | VM_READ | VM_WRITE);
+        pr_info("vm_page_prot: %lx\n", vma->vm_page_prot);
         int ret = remap_pfn_range(vma, blockinfo->vaddr, page_to_pfn(page), blockinfo->size, vma->vm_page_prot);
         if (ret) {
             pr_info("umem_ioctl cmd page_fault: failed to remap pages\n");
+            free_pool_pages(blockinfo->pool, pagenum, page - umem_pool[blockinfo->pool].head);
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
+        blockinfo->page = page;
+        pr_info("umem_ioctl cmd page_fault: remapped pages\n");
 
         spin_unlock(&userinfo_lock);
 
