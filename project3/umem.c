@@ -14,6 +14,9 @@
 
 MODULE_LICENSE("GPL");
 
+static struct page* alloc_pool_pages(const int poolid, const int pagenum, struct task_struct* user);
+static void free_pool_pages(const int poolid, const int pagenum, const int offset);
+
 // TODO: data structure definition
 struct umem_pool_t {
     struct page* head;
@@ -48,10 +51,14 @@ struct list_head userinfo_head;
 static int umem_open(struct inode *inode, struct file *filp)
 {
     // TODO
-    pr_info("Process %p opened\n", current);
+    pr_info("umem_open: Process %p opened\n", current);
     struct userinfo_t* userinfo = kmalloc(sizeof(struct userinfo_t), GFP_KERNEL);
     userinfo->user = current;
     INIT_LIST_HEAD(&userinfo->block_head);
+    pr_info("umem_open: userinfo->block_head %p\n", (void *)&userinfo->block_head);
+    pr_info("umem_open: userinfo->block_head.next %p\n", (void *)userinfo->block_head.next);
+    pr_info("umem_open: userinfo->block_head.prev %p\n", (void *)userinfo->block_head.prev);
+
     spin_lock(&userinfo_lock);
     list_add(&userinfo->list, &userinfo_head);
     spin_unlock(&userinfo_lock);
@@ -63,16 +70,24 @@ static int umem_open(struct inode *inode, struct file *filp)
 static int umem_release(struct inode *inode, struct file *filp)
 {
     // TODO
-    pr_info("Process %p released\n", current);
+    pr_info("umem_release: Process %p released\n", current);
     spin_lock(&userinfo_lock);
     struct userinfo_t* userinfo = filp->private_data;
 
     /* Release unfreed pages in pool */
-    struct list_head *block;
-    list_for_each(block, &userinfo->block_head) {
+    struct list_head *block, *nb;
+    list_for_each_safe(block, nb, &userinfo->block_head) {
+        // MUST USE list_for_each_SAFE here, to avoid side-effects caused by list_del()
         struct umem_block_t* umemblock = list_entry(block, struct umem_block_t, blocklist);
-        vm_munmap(umemblock->vaddr, umemblock->size);
+        pr_info("umem_release: now at block %p", (void *)umemblock);
+        if (umemblock->page != NULL) {
+            int pagenum = (umemblock->size - 1) / PAGE_SIZE + 1;
+            int offset = umemblock->page - umem_pool[umemblock->pool].head;
+            free_pool_pages(umemblock->pool, pagenum, offset);
+            pr_info("umem_release: free pages %p\n", (void *)umemblock->page);
+        }
         list_del(block);
+        pr_info("umem_release: free block %p\n", (void *)umemblock);
         kfree(umemblock);
     }
 
@@ -156,7 +171,7 @@ alloc_pool_pages(const int poolid, const int pagenum, struct task_struct* user) 
     return (struct page*)(page - pagenum);
 }
 
-void free_pool_pages(const int poolid, const int pagenum, const int offset) {
+static void free_pool_pages(const int poolid, const int pagenum, const int offset) {
     if (poolid >= UMEM_NUM_POOL) {
         pr_warn("Invalid pool id\n");
         return;
@@ -202,7 +217,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             return -EINVAL;
         }
         // TODO
-        pr_info("todo\n");
+        pr_info("umem_ioctl cmd malloc: mallocing new block\n");
         spin_lock(&userinfo_lock);
 
         /* Find or create userinfo of current process */
@@ -213,15 +228,19 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             INIT_LIST_HEAD(&userinfo->block_head);
             list_add(&userinfo->list, &userinfo_head);
         }
+        pr_info("umem_ioctl cmd malloc: userinfo %p\n", (void *)userinfo);
 
         /* Add new blockinfo to blocklist */
         struct umem_block_t* block = kmalloc(sizeof(struct umem_block_t), GFP_KERNEL);
         block->pool = kern_umem_info.umem_pool;
         block->size = kern_umem_info.umem_size;
         block->vaddr = vm_mmap(NULL, 0, kern_umem_info.umem_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, 0);
-        pr_info("umem_ioctl cmd malloc: %p\n", (void *)block->vaddr);
         block->page = NULL;
+        pr_info("umem_ioctl cmd malloc: vm_mmap %p\n", (void *)block->vaddr);
+        pr_info("umem_ioctl cmd malloc: block %p\n", (void *)block);
+
         list_add(&block->blocklist, &userinfo->block_head);
+        pr_info("umem_ioctl cmd malloc: add block to blocklist\n");
 
         spin_unlock(&userinfo_lock);
 
