@@ -25,6 +25,7 @@ static void umem_user_init(void)
 {
     struct sigaction act = {0};
     umem_fd = open(UMEM_PATH_NAME, O_RDONLY);
+    printf("Opening /dev/umem, fd = %d\n", umem_fd);
     if (umem_fd < 0)
     {
         return;
