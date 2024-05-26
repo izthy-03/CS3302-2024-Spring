@@ -276,6 +276,17 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         vm_munmap(blockinfo->vaddr, blockinfo->size);
         pr_info("umem_ioctl cmd free: free blockinfo\n");
 
+        /* Free blockinfo and reset umem_pool pages */
+        if (blockinfo->page != NULL) {
+            int pagenum = (blockinfo->size - 1) / PAGE_SIZE + 1;
+            int offset = blockinfo->page - umem_pool[blockinfo->pool].head;
+            free_pool_pages(blockinfo->pool, pagenum, offset);
+            pr_info("umem_ioctl cmd free: free pages %px\n", (void *)blockinfo->page);
+        }
+        list_del(&blockinfo->blocklist);
+        kfree(blockinfo);
+        pr_info("umem_ioctl cmd free: free blockinfo\n");
+
         spin_unlock(&userinfo_lock);
         return 0;
 
