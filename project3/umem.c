@@ -115,7 +115,7 @@ find_blockinfo(struct userinfo_t* userinfo, unsigned long addr) {
     struct list_head *node, *nn;
     list_for_each_safe(node, nn, &userinfo->block_head) {
         struct umem_block_t* block = list_entry(node, struct umem_block_t, blocklist);
-        if (block->vaddr == addr) {
+        if (block->vaddr <= addr && block->vaddr + block->size > addr) {
             return block;
         }
     }
@@ -181,6 +181,7 @@ static void free_pool_pages(const int poolid, const int pagenum, const int offse
     for (int i = 0; i < pagenum; i++) {
         umem_pool[poolid].pginfo[offset + i].owner = NULL;
     }
+    memset(page_to_pfn(umem_pool[poolid].head + offset), 0, pagenum * PAGE_SIZE);
 }
 
 static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
@@ -312,7 +313,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
-        blockinfo = find_blockinfo(userinfo, va);
+        blockinfo = find_blockinfo(userinfo, kern_umem_info.umem_addr);
         if (blockinfo == NULL) {
             pr_info("umem_ioctl cmd page_fault: failed to find blockinfo at %px\n", (void *)va);
             spin_unlock(&userinfo_lock);
