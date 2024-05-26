@@ -51,7 +51,7 @@ struct list_head userinfo_head;
 static int umem_open(struct inode *inode, struct file *filp)
 {
     // TODO
-    pr_info("umem_open: Process %p opened\n", current);
+    pr_info("umem_open: Process %px opened\n", current);
     struct userinfo_t* userinfo = kmalloc(sizeof(struct userinfo_t), GFP_KERNEL);
     userinfo->user = current;
     INIT_LIST_HEAD(&userinfo->block_head);
@@ -67,7 +67,7 @@ static int umem_open(struct inode *inode, struct file *filp)
 static int umem_release(struct inode *inode, struct file *filp)
 {
     // TODO
-    pr_info("umem_release: Process %p released\n", current);
+    pr_info("umem_release: Process %px released\n", current);
     spin_lock(&userinfo_lock);
     struct userinfo_t* userinfo = filp->private_data;
 
@@ -76,15 +76,15 @@ static int umem_release(struct inode *inode, struct file *filp)
     list_for_each_safe(block, nb, &userinfo->block_head) {
         // MUST USE list_for_each_SAFE here, to avoid side-effects caused by list_del()
         struct umem_block_t* umemblock = list_entry(block, struct umem_block_t, blocklist);
-        pr_info("umem_release: now at block %p", (void *)umemblock);
+        pr_info("umem_release: now at block %px", (void *)umemblock);
         if (umemblock->page != NULL) {
             int pagenum = (umemblock->size - 1) / PAGE_SIZE + 1;
             int offset = umemblock->page - umem_pool[umemblock->pool].head;
             free_pool_pages(umemblock->pool, pagenum, offset);
-            pr_info("umem_release: free pages %p\n", (void *)umemblock->page);
+            pr_info("umem_release: free pages %px\n", (void *)umemblock->page);
         }
         list_del(block);
-        pr_info("umem_release: free block %p\n", (void *)umemblock);
+        pr_info("umem_release: free block %px\n", (void *)umemblock);
         kfree(umemblock);
     }
 
@@ -112,8 +112,8 @@ find_userinfo(struct task_struct* user) {
 
 static struct umem_block_t* 
 find_blockinfo(struct userinfo_t* userinfo, unsigned long addr) {
-    struct list_head* node;
-    list_for_each(node, &userinfo->block_head) {
+    struct list_head *node, *nn;
+    list_for_each_safe(node, nn, &userinfo->block_head) {
         struct umem_block_t* block = list_entry(node, struct umem_block_t, blocklist);
         if (block->vaddr == addr) {
             return block;
@@ -226,7 +226,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             INIT_LIST_HEAD(&userinfo->block_head);
             list_add(&userinfo->list, &userinfo_head);
         }
-        pr_info("umem_ioctl cmd malloc: userinfo %p\n", (void *)userinfo);
+        pr_info("umem_ioctl cmd malloc: userinfo %px\n", (void *)userinfo);
 
         /* Add new blockinfo to blocklist */
         struct umem_block_t* block = kmalloc(sizeof(struct umem_block_t), GFP_KERNEL);
@@ -234,8 +234,8 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         block->size = kern_umem_info.umem_size;
         block->vaddr = vm_mmap(NULL, 0, kern_umem_info.umem_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, 0);
         block->page = NULL;
-        pr_info("umem_ioctl cmd malloc: vm_mmap %p\n", (void *)block->vaddr);
-        pr_info("umem_ioctl cmd malloc: block %p\n", (void *)block);
+        pr_info("umem_ioctl cmd malloc: vm_mmap %px\n", (void *)block->vaddr);
+        pr_info("umem_ioctl cmd malloc: block %px\n", (void *)block);
 
         list_add(&block->blocklist, &userinfo->block_head);
         pr_info("umem_ioctl cmd malloc: add block to blocklist\n");
@@ -290,8 +290,10 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         pr_info("umem_ioctl cmd page_fault: %px\n", (void *)kern_umem_info.umem_addr);
         // TODO
-        pr_info("todo\n");
         spin_lock(&userinfo_lock);
+
+        /* Round down to align */
+        unsigned long va = (kern_umem_info.umem_addr >> 12) << 12;
 
         /* Find the specified block and check validity */
         userinfo = find_userinfo(current);
@@ -300,9 +302,9 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
-        blockinfo = find_blockinfo(userinfo, kern_umem_info.umem_addr);
+        blockinfo = find_blockinfo(userinfo, va);
         if (blockinfo == NULL) {
-            pr_info("umem_ioctl cmd page_fault: failed to find blockinfo at %p\n", (void *)kern_umem_info.umem_addr);
+            pr_info("umem_ioctl cmd page_fault: failed to find blockinfo at %px\n", (void *)va);
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
