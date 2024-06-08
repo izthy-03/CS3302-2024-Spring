@@ -51,6 +51,7 @@ struct list_head userinfo_head;
 static int umem_open(struct inode *inode, struct file *filp)
 {
     // TODO
+<<<<<<< HEAD
     pr_info("umem_open: Process %p opened\n", current);
     struct userinfo_t* userinfo = kmalloc(sizeof(struct userinfo_t), GFP_KERNEL);
     userinfo->user = current;
@@ -58,6 +59,12 @@ static int umem_open(struct inode *inode, struct file *filp)
     pr_info("umem_open: userinfo->block_head %p\n", (void *)&userinfo->block_head);
     pr_info("umem_open: userinfo->block_head.next %p\n", (void *)userinfo->block_head.next);
     pr_info("umem_open: userinfo->block_head.prev %p\n", (void *)userinfo->block_head.prev);
+=======
+    pr_info("umem_open: Process %px opened\n", current);
+    struct userinfo_t* userinfo = kmalloc(sizeof(struct userinfo_t), GFP_KERNEL);
+    userinfo->user = current;
+    INIT_LIST_HEAD(&userinfo->block_head);
+>>>>>>> refs/remotes/private/master
 
     spin_lock(&userinfo_lock);
     list_add(&userinfo->list, &userinfo_head);
@@ -70,7 +77,11 @@ static int umem_open(struct inode *inode, struct file *filp)
 static int umem_release(struct inode *inode, struct file *filp)
 {
     // TODO
+<<<<<<< HEAD
     pr_info("umem_release: Process %p released\n", current);
+=======
+    pr_info("umem_release: Process %px released\n", current);
+>>>>>>> refs/remotes/private/master
     spin_lock(&userinfo_lock);
     struct userinfo_t* userinfo = filp->private_data;
 
@@ -79,15 +90,26 @@ static int umem_release(struct inode *inode, struct file *filp)
     list_for_each_safe(block, nb, &userinfo->block_head) {
         // MUST USE list_for_each_SAFE here, to avoid side-effects caused by list_del()
         struct umem_block_t* umemblock = list_entry(block, struct umem_block_t, blocklist);
+<<<<<<< HEAD
         pr_info("umem_release: now at block %p", (void *)umemblock);
+=======
+        pr_info("umem_release: now at block %px", (void *)umemblock);
+>>>>>>> refs/remotes/private/master
         if (umemblock->page != NULL) {
             int pagenum = (umemblock->size - 1) / PAGE_SIZE + 1;
             int offset = umemblock->page - umem_pool[umemblock->pool].head;
             free_pool_pages(umemblock->pool, pagenum, offset);
+<<<<<<< HEAD
             pr_info("umem_release: free pages %p\n", (void *)umemblock->page);
         }
         list_del(block);
         pr_info("umem_release: free block %p\n", (void *)umemblock);
+=======
+            pr_info("umem_release: free pages %px\n", (void *)umemblock->page);
+        }
+        list_del(block);
+        pr_info("umem_release: free block %px\n", (void *)umemblock);
+>>>>>>> refs/remotes/private/master
         kfree(umemblock);
     }
 
@@ -115,10 +137,15 @@ find_userinfo(struct task_struct* user) {
 
 static struct umem_block_t* 
 find_blockinfo(struct userinfo_t* userinfo, unsigned long addr) {
+<<<<<<< HEAD
     struct list_head* node;
     list_for_each(node, &userinfo->block_head) {
+=======
+    struct list_head *node, *nn;
+    list_for_each_safe(node, nn, &userinfo->block_head) {
+>>>>>>> refs/remotes/private/master
         struct umem_block_t* block = list_entry(node, struct umem_block_t, blocklist);
-        if (block->vaddr == addr) {
+        if (block->vaddr <= addr && block->vaddr + block->size > addr) {
             return block;
         }
     }
@@ -190,6 +217,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     long err;
     struct umem_info kern_umem_info;
+
     struct userinfo_t* userinfo;
     struct umem_block_t* blockinfo;
 
@@ -228,23 +256,35 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             INIT_LIST_HEAD(&userinfo->block_head);
             list_add(&userinfo->list, &userinfo_head);
         }
+<<<<<<< HEAD
         pr_info("umem_ioctl cmd malloc: userinfo %p\n", (void *)userinfo);
+=======
+        pr_info("umem_ioctl cmd malloc: userinfo %px\n", (void *)userinfo);
+>>>>>>> refs/remotes/private/master
 
         /* Add new blockinfo to blocklist */
         struct umem_block_t* block = kmalloc(sizeof(struct umem_block_t), GFP_KERNEL);
         block->pool = kern_umem_info.umem_pool;
         block->size = kern_umem_info.umem_size;
+<<<<<<< HEAD
         block->vaddr = vm_mmap(NULL, 0, kern_umem_info.umem_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, 0);
         block->page = NULL;
         pr_info("umem_ioctl cmd malloc: vm_mmap %p\n", (void *)block->vaddr);
         pr_info("umem_ioctl cmd malloc: block %p\n", (void *)block);
+=======
+        block->vaddr = vm_mmap(NULL, 0, kern_umem_info.umem_size, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, 0);
+        block->page = NULL;
+        pr_info("umem_ioctl cmd malloc: vm_mmap %px\n", (void *)block->vaddr);
+        pr_info("umem_ioctl cmd malloc: block %px\n", (void *)block);
+>>>>>>> refs/remotes/private/master
 
         list_add(&block->blocklist, &userinfo->block_head);
         pr_info("umem_ioctl cmd malloc: add block to blocklist\n");
 
         spin_unlock(&userinfo_lock);
 
-        return block->vaddr;
+        put_user(block->vaddr, &((struct umem_info __user *)arg)->umem_addr);
+        return 0;
 
 
     case UMEM_IOC_FREE:
@@ -256,7 +296,6 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         pr_info("umem_ioctl cmd free: %px\n", (void *)kern_umem_info.umem_addr);
         // TODO
-        pr_info("todo\n");
         spin_lock(&userinfo_lock);
 
         /* Find current userinfo */
@@ -278,6 +317,17 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         vm_munmap(blockinfo->vaddr, blockinfo->size);
         pr_info("umem_ioctl cmd free: free blockinfo\n");
 
+        /* Free blockinfo and reset umem_pool pages */
+        if (blockinfo->page != NULL) {
+            int pagenum = (blockinfo->size - 1) / PAGE_SIZE + 1;
+            int offset = blockinfo->page - umem_pool[blockinfo->pool].head;
+            free_pool_pages(blockinfo->pool, pagenum, offset);
+            pr_info("umem_ioctl cmd free: free pages %px\n", (void *)blockinfo->page);
+        }
+        list_del(&blockinfo->blocklist);
+        kfree(blockinfo);
+        pr_info("umem_ioctl cmd free: free blockinfo\n");
+
         spin_unlock(&userinfo_lock);
         return 0;
 
@@ -291,7 +341,6 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         pr_info("umem_ioctl cmd page_fault: %px\n", (void *)kern_umem_info.umem_addr);
         // TODO
-        pr_info("todo\n");
         spin_lock(&userinfo_lock);
 
         /* Find the specified block and check validity */
@@ -303,7 +352,16 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         }
         blockinfo = find_blockinfo(userinfo, kern_umem_info.umem_addr);
         if (blockinfo == NULL) {
+<<<<<<< HEAD
             pr_info("umem_ioctl cmd page_fault: failed to find blockinfo at %p\n", (void *)kern_umem_info.umem_addr);
+=======
+            pr_info("umem_ioctl cmd page_fault: failed to find blockinfo at %px\n", (void *)kern_umem_info.umem_addr);
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
+        if (blockinfo->page != NULL) {
+            pr_info("umem_ioctl cmd page_fault: page already allocated\n");
+>>>>>>> refs/remotes/private/master
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
@@ -314,6 +372,7 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         if (page == NULL) {
             pr_info("umem_ioctl cmd page_fault: failed to allocate pages\n");
             spin_unlock(&userinfo_lock);
+<<<<<<< HEAD
             return -EINVAL;
         }
         /* Remap vaddr to physical pages */
@@ -326,6 +385,27 @@ static long umem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             spin_unlock(&userinfo_lock);
             return -EINVAL;
         }
+=======
+            return -ENOMEM;
+        }
+        pr_info("umem_ioctl cmd page_fault: allocated pages %px\n", (void *)page);
+
+        /* Remap vaddr to physical pages */
+        struct vm_area_struct* vma = find_vma(current->mm, blockinfo->vaddr);
+        // Modify vm_prot to RW 
+        vma->vm_page_prot = vm_get_page_prot(vma->vm_flags | VM_READ | VM_WRITE);
+        // pr_info("vm_page_prot: %lx\n", vma->vm_page_prot);
+
+        int ret = remap_pfn_range(vma, blockinfo->vaddr, page_to_pfn(page), blockinfo->size, vma->vm_page_prot);
+        if (ret) {
+            pr_info("umem_ioctl cmd page_fault: failed to remap pages\n");
+            free_pool_pages(blockinfo->pool, pagenum, page - umem_pool[blockinfo->pool].head);
+            spin_unlock(&userinfo_lock);
+            return -EINVAL;
+        }
+        blockinfo->page = page;
+        pr_info("umem_ioctl cmd page_fault: remapped pages\n");
+>>>>>>> refs/remotes/private/master
 
         spin_unlock(&userinfo_lock);
 
@@ -377,11 +457,11 @@ static void umem_pool_destroy(void)
     // TODO
     pr_info("Freeing umem pools\n");
 
-    struct list_head *node, *block;
-    list_for_each(node, &userinfo_head) {
+    struct list_head *node, *block, *nn, *nb;
+    list_for_each_safe(node, nn, &userinfo_head) {
         struct userinfo_t* userinfo = list_entry(node, struct userinfo_t, list);
 
-        list_for_each(block, &userinfo->block_head) {
+        list_for_each_safe(block, nb, &userinfo->block_head) {
             struct umem_block_t* umemblock = list_entry(block, struct umem_block_t, blocklist);
             list_del(block);
             kfree(umemblock);
