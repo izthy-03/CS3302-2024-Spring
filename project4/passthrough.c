@@ -53,6 +53,23 @@
 
 #include "passthrough_helpers.h"
 
+#include <stdlib.h>
+
+/*
+ * Command line options
+ *
+ * We can't set default values for the char* fields here because
+ * fuse_opt_parse would attempt to free() them when the user specifies
+ * different values on the command line.
+ */
+static struct options {
+	const char *hidden_file_name;
+	const char *encrypted_file_name;
+	const char *exec_file_name;
+	int show_help;
+} options;
+
+
 static int fill_dir_plus = 0;
 
 static void *xmp_init(struct fuse_conn_info *conn,
@@ -92,6 +109,11 @@ static int xmp_getattr(const char *path, struct stat *stbuf,
 	if (res == -1)
 		return -errno;
 
+	/* Add exec permissions */
+	if (!strcmp(realpath(path, NULL), options.exec_file_name)) {
+		stbuf->st_mode |= S_IXUSR | S_IXGRP | S_IXOTH;
+	}
+
 	return 0;
 }
 
@@ -125,6 +147,7 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 {
 	DIR *dp;
 	struct dirent *de;
+	char filename[1024];
 
 	(void) offset;
 	(void) fi;
@@ -135,6 +158,11 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		return -errno;
 
 	while ((de = readdir(dp)) != NULL) {
+		/* Resolve absolute path */
+		sprintf(filename, "%s/%s", path, de->d_name);
+		if (!strcmp(realpath(filename, NULL), options.hidden_file_name))
+			continue;
+
 		struct stat st;
 		memset(&st, 0, sizeof(st));
 		st.st_ino = de->d_ino;
@@ -334,6 +362,13 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 	res = pread(fd, buf, size, offset);
 	if (res == -1)
 		res = -errno;
+
+	if (!strcmp(realpath(path, NULL), options.encrypted_file_name)) {
+		// Encrypt the file
+		for (int i = 0; i < res; i++) {
+			buf[i] = (buf[i] + 1) % 255;
+		}
+	}
 
 	if(fi == NULL)
 		close(fd);
@@ -564,19 +599,6 @@ static const struct fuse_operations xmp_oper = {
 	.lseek		= xmp_lseek,
 };
 
-/*
- * Command line options
- *
- * We can't set default values for the char* fields here because
- * fuse_opt_parse would attempt to free() them when the user specifies
- * different values on the command line.
- */
-static struct options {
-	const char *hidden_file_name;
-	const char *encrypted_file_name;
-	const char *exec_file_name;
-	int show_help;
-} options;
 
 #define OPTION(t, p)                           \
     { t, offsetof(struct options, p), 1 }
@@ -641,6 +663,26 @@ int main(int argc, char *argv[])
 			new_argv[new_argc++] = args.argv[i];
 		}
 	}
+
+	/* Expand relative path to absolute path */
+	char buf[1024];
+	if (strcmp(options.hidden_file_name, "")) {
+		realpath(options.hidden_file_name, buf);
+		options.hidden_file_name = strdup(buf);
+	}
+	if (strcmp(options.encrypted_file_name, "")) {
+		realpath(options.encrypted_file_name, buf);
+		options.encrypted_file_name = strdup(buf);
+	}
+	if (strcmp(options.exec_file_name, "")) {
+		realpath(options.exec_file_name, buf);
+		options.exec_file_name = strdup(buf);
+	}
+
+	printf("hidden_file_name: %s\n", options.hidden_file_name);
+	printf("encrypted_file_name: %s\n", options.encrypted_file_name);
+	printf("exec_file_name: %s\n", options.exec_file_name);
+
 	ret = fuse_main(new_argc, new_argv, &xmp_oper, NULL);
 	fuse_opt_free_args(&args);
 	return ret;
